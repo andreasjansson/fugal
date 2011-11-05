@@ -13,26 +13,26 @@
 #define DROP_RIGHT      'f'
 #define DROP_DOWN       'c'
 #define DROP_LEFT       's'
-#define SET_NOTE        KEY_RETURN
+#define SET_NOTE        KEY_ENTER
 #define DELETE_CELL     KEY_BACKSPACE
 
-#define UP              0001
-#define UPRIGHT         0002
-#define RIGHT           0004
-#define DOWNRIGHT       0010
-#define DOWN            0011
-#define DOWNLEFT        0012
-#define LEFT            0014
-#define UPLEFT          0100
-#define HORIZONTAL      0101
-#define VERTICAL        0102
-#define PATH            0104
-#define NOTE            0108
+#define UP              000001
+#define UPRIGHT         000002
+#define RIGHT           000004
+#define DOWNRIGHT       000010
+#define DOWN            000020
+#define DOWNLEFT        000040
+#define LEFT            000100
+#define UPLEFT          000200
+#define HORIZONTAL      000400
+#define VERTICAL        001000
+#define PATH            002000
+#define NOTE            004000
 
-#define COLOUR_MATRIX   1
-#define COLOUR_BALL     2
-#define COLOUR_CURSOR   3
-#define COLOUR_CURSORBALL 4
+#define COLOUR_MATRIX   000001
+#define COLOUR_BALL     000002
+#define COLOUR_CURSOR   000004
+#define COLOUR_NOTE     000010
 
 int matrix[NROW][NCOL];
 int cursor_x, cursor_y, ball_x, ball_y, ball_direction;
@@ -41,13 +41,18 @@ void init_curses()
 {
     initscr();
     start_color();
-    init_pair(COLOUR_MATRIX, COLOR_WHITE, COLOR_BLUE);
-    init_pair(COLOUR_BALL, COLOR_WHITE, COLOR_GREEN);
-    init_pair(COLOUR_CURSOR, COLOR_BLUE, COLOR_WHITE);
-    init_pair(COLOUR_CURSORBALL, COLOR_GREEN, COLOR_WHITE);
     raw();
     keypad(stdscr, TRUE);
     noecho();
+
+    init_pair(COLOUR_MATRIX, COLOR_WHITE, COLOR_BLUE);
+    init_pair(COLOUR_BALL, COLOR_WHITE, COLOR_GREEN);
+    init_pair(COLOUR_CURSOR, COLOR_BLUE, COLOR_WHITE);
+    init_pair(COLOUR_CURSOR | COLOUR_BALL, COLOR_GREEN, COLOR_WHITE);
+    init_pair(COLOUR_NOTE, COLOR_RED, COLOR_BLUE);
+    init_pair(COLOUR_NOTE | COLOUR_CURSOR, COLOR_WHITE, COLOR_RED);
+    init_pair(COLOUR_NOTE | COLOUR_BALL, COLOR_RED, COLOR_GREEN);
+    init_pair(COLOUR_NOTE | COLOUR_BALL | COLOUR_CURSOR, COLOR_GREEN, COLOR_RED);
 }
 
 void end_curses()
@@ -65,63 +70,90 @@ void init_matrix()
 
 int symbol_for_cell(int cell)
 {
-    if(cell & (UP | RIGHT | DOWN | LEFT))
+    if((cell & (UP | RIGHT | DOWN | LEFT)) == (UP | RIGHT | DOWN | LEFT))
         return ACS_PLUS;
 
-    if(cell & (UP | RIGHT | DOWN))
+    if((cell & (UP | RIGHT | DOWN)) == (UP | RIGHT | DOWN))
         return ACS_LTEE;
 
-    if(cell & (UP | RIGHT | LEFT))
+    if((cell & (UP | RIGHT | LEFT)) == (UP | RIGHT | LEFT))
         return ACS_BTEE;
 
-    if(cell & (UP | DOWN | LEFT))
+    if((cell & (UP | DOWN | LEFT)) == (UP | DOWN | LEFT))
         return ACS_RTEE;
 
-    if(cell & (RIGHT | DOWN | LEFT))
+    if((cell & (RIGHT | DOWN | LEFT)) == (RIGHT | DOWN | LEFT))
         return ACS_TTEE;
 
-    if(cell & (UP | LEFT))
+    if((cell & (UP | LEFT)) == (UP | LEFT))
         return ACS_LRCORNER;
 
-    if(cell & (UP | DOWN))
+    if((cell & (UP | DOWN)) == (UP | DOWN))
         return ACS_VLINE;
 
-    if(cell & (UP | RIGHT))
+    if((cell & (UP | RIGHT)) == (UP | RIGHT))
         return ACS_LLCORNER;
 
-    if(cell & (RIGHT | DOWN))
+    if((cell & (RIGHT | DOWN)) == (RIGHT | DOWN))
         return ACS_ULCORNER;
 
-    if(cell & (RIGHT | LEFT))
+    if((cell & (RIGHT | LEFT)) == (RIGHT | LEFT))
         return ACS_HLINE;
 
-    if(cell & (DOWN | LEFT))
+    if((cell & (DOWN | LEFT)) == (DOWN | LEFT))
         return ACS_URCORNER;
 
-    if(cell & PATH)
-        return BULLET;
+    if((cell & LEFT) == LEFT)
+        return ACS_HLINE;
+
+    if((cell & RIGHT) == RIGHT)
+        return ACS_HLINE;
+
+    if((cell & UP) == UP)
+        return ACS_VLINE;
+
+    if((cell & DOWN) == DOWN)
+        return ACS_VLINE;
+
+    if((cell & PATH) == PATH)
+        return ACS_BULLET;
+
+    return ' ';
+}
+
+void set_note(int x, int y)
+{
+    matrix[x][y] |= NOTE;
+}
+
+int colour_for_cell(int cell, int x, int y)
+{
+    int colour = 0;
+    if(y == cursor_y && x == cursor_x)
+        colour |= COLOUR_CURSOR;
+    if(y == ball_y && x == ball_x)
+        colour |= COLOUR_BALL;
+    if((cell & NOTE) == NOTE)
+        colour |= COLOUR_NOTE;
+    if(colour == 0)
+        colour = COLOUR_MATRIX;
+    return colour;
 }
 
 void redraw()
 {
-    int i, j, cell, colour, symbol;
+    int x, y, cell, colour, symbol;
     for(y = 0; y < NROW; y ++) {
         for(x = 0; x < NCOL; x ++) {
-            if(y == cursor_y && x == cursor_x &&
-               x == ball_x && y == ball_y)
-                colour = COLOUR_CURSORBALL;
-            else if(y == cursor_y && x == cursor_x)
-                colour = COLOUR_CURSOR;
-            else if(y == ball_y && x == ball_x)
-                colour = COLOUR_BALL;
-            else
-                colour = COLOUR_MATRIX;
-            attron(COLOR_PAIR(colour));
-                
             cell = matrix[x][y];
+            colour = colour_for_cell(cell, x, y);
+            attron(COLOR_PAIR(colour));
             symbol = symbol_for_cell(cell);
+            mvaddch(y, x, symbol);
         }
     }
+
+    refresh();
 }
 
 void set_position(int new_cursor_x, int new_cursor_y)
@@ -137,11 +169,9 @@ void set_position(int new_cursor_x, int new_cursor_y)
 
     cursor_x = new_cursor_x;
     cursor_y = new_cursor_y;
-
-    redraw();
 }
 
-void clear(int x, int y)
+void clear_cell(int x, int y)
 {
     matrix[x][y] = 0;
     if(x < NCOL - 1)
@@ -156,26 +186,24 @@ void clear(int x, int y)
 
 void put_path(int x, int y)
 {
-    int cell = PATH;
+    matrix[x][y] = PATH;
 
-    if(x < NCOL - 1 && matrix[x + 1][y] & PATH) {
+    if(x < NCOL - 1 && (matrix[x + 1][y] & PATH) == PATH) {
         matrix[x][y] |= RIGHT;
         matrix[x + 1][y] |= LEFT;
     }
-    if(x > 0 && matrix[x - 1][y] & PATH) {
+    if(x > 0 && (matrix[x - 1][y] & PATH) == PATH) {
         matrix[x][y] |= LEFT;
         matrix[x - 1][y] |= RIGHT;
     }
-    if(y < NROW - 1 && matrix[x][y + 1] & PATH) {
+    if(y < NROW - 1 && (matrix[x][y + 1] & PATH) == PATH) {
         matrix[x][y] |= DOWN;
         matrix[x][y + 1] |= UP;
     }
-    if(y > 0 && matrix[x][y - 1] & PATH) {
+    if(y > 0 && (matrix[x][y - 1] & PATH) == PATH) {
         matrix[x][y] |= UP;
         matrix[x][y - 1] |= DOWN;
     }
-
-    matrix[x][y] = cell;
 }
 
 
@@ -190,27 +218,34 @@ int main()
         switch(ch) {
         case MOVE_UP:
             set_position(cursor_x, cursor_y - 1);
+            redraw();
             break;
         case MOVE_RIGHT:
             set_position(cursor_x + 1, cursor_y);
+            redraw();
             break;
         case MOVE_DOWN:
             set_position(cursor_x, cursor_y + 1);
+            redraw();
             break;
         case MOVE_LEFT:
             set_position(cursor_x - 1, cursor_y);
+            redraw();
             break;
 
         case PUT_PATH:
             put_path(cursor_x, cursor_y);
+            redraw();
             break;
 
         case SET_NOTE:
             set_note(cursor_x, cursor_y);
+            redraw();
             break;
 
         case DELETE_CELL:
-            clear(cursor_x, cursor_y);
+            clear_cell(cursor_x, cursor_y);
+            redraw();
             break;
 
         default:
