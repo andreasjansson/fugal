@@ -1,19 +1,23 @@
+// TODO: catch ctrl-c
+// TODO: terminal resize handling (including "too small")
+// TODO: config.h
+// TODO: save
+
 #include <ncurses.h>
 #include <stdlib.h>
 
+// put these in config
 #define NROW 20
-#define NCOL 20
+#define NCOL 40
 
+// put these in config
 #define MOVE_UP         KEY_UP
 #define MOVE_RIGHT      KEY_RIGHT
 #define MOVE_DOWN       KEY_DOWN
 #define MOVE_LEFT       KEY_LEFT
 #define PUT_PATH        ' '
-#define DROP_UP         'e'
-#define DROP_RIGHT      'f'
-#define DROP_DOWN       'c'
-#define DROP_LEFT       's'
-#define SET_NOTE        KEY_ENTER
+#define DROP            '\n'
+#define SET_NOTE        'n'
 #define DELETE_CELL     KEY_BACKSPACE
 
 #define UP              000001
@@ -34,14 +38,23 @@
 #define COLOUR_CURSOR   000004
 #define COLOUR_NOTE     000010
 
-int matrix[NROW][NCOL];
-int cursor_x, cursor_y, ball_x, ball_y, ball_direction;
+typedef struct {
+    int x;
+    int y;
+    int direction;
+} ball_t;
+
+int matrix[NCOL][NROW];
+int cursor_x, cursor_y;
+ball_t *balls;
+int ball_count;
 
 void init_curses()
 {
     initscr();
     start_color();
-    raw();
+    curs_set(0);
+    cbreak();
     keypad(stdscr, TRUE);
     noecho();
 
@@ -49,23 +62,24 @@ void init_curses()
     init_pair(COLOUR_BALL, COLOR_WHITE, COLOR_GREEN);
     init_pair(COLOUR_CURSOR, COLOR_BLUE, COLOR_WHITE);
     init_pair(COLOUR_CURSOR | COLOUR_BALL, COLOR_GREEN, COLOR_WHITE);
-    init_pair(COLOUR_NOTE, COLOR_RED, COLOR_BLUE);
-    init_pair(COLOUR_NOTE | COLOUR_CURSOR, COLOR_WHITE, COLOR_RED);
+    init_pair(COLOUR_NOTE, COLOR_WHITE, COLOR_RED);
+    init_pair(COLOUR_NOTE | COLOUR_CURSOR, COLOR_RED, COLOR_WHITE);
     init_pair(COLOUR_NOTE | COLOUR_BALL, COLOR_RED, COLOR_GREEN);
     init_pair(COLOUR_NOTE | COLOUR_BALL | COLOUR_CURSOR, COLOR_GREEN, COLOR_RED);
 }
 
 void end_curses()
 {
+    curs_set(1);
     endwin();
 }
 
 void init_matrix()
 {
-    int i, j;
-    for(i = 0; i < NROW; i ++)
-        for(j = 0; j < NCOL; j ++)
-            matrix[i][j] = 0;
+    int x, y;
+    for(y = 0; y < NROW; y ++)
+        for(x = 0; x < NCOL; x ++)
+            matrix[x][y] = 0;
 }
 
 int symbol_for_cell(int cell)
@@ -126,12 +140,22 @@ void set_note(int x, int y)
     matrix[x][y] |= NOTE;
 }
 
+int ball_on(int x, int y)
+{
+    int i;
+    for(i = 0; i < ball_count; i ++)
+        if(balls[i].x == x && balls[i].y == y)
+            return TRUE;
+
+    return FALSE;
+}
+
 int colour_for_cell(int cell, int x, int y)
 {
     int colour = 0;
     if(y == cursor_y && x == cursor_x)
         colour |= COLOUR_CURSOR;
-    if(y == ball_y && x == ball_x)
+    if(ball_on(x, y))
         colour |= COLOUR_BALL;
     if((cell & NOTE) == NOTE)
         colour |= COLOUR_NOTE;
@@ -186,7 +210,7 @@ void clear_cell(int x, int y)
 
 void put_path(int x, int y)
 {
-    matrix[x][y] = PATH;
+    matrix[x][y] |= PATH;
 
     if(x < NCOL - 1 && (matrix[x + 1][y] & PATH) == PATH) {
         matrix[x][y] |= RIGHT;
@@ -209,8 +233,13 @@ void put_path(int x, int y)
 
 int main()
 {
+    ball_count = 0;
+    cursor_x = NCOL / 2 - 1;
+    cursor_y = NROW / 2 - 1;
+
     init_curses();
     init_matrix();
+    redraw();
 
     int ch;
     while(ch != 'q') {
