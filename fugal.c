@@ -16,7 +16,7 @@
 #define MOVE_DOWN       KEY_DOWN
 #define MOVE_LEFT       KEY_LEFT
 #define PUT_PATH        ' '
-#define DROP            '\n'
+#define DROP_BALL       '\n'
 #define SET_NOTE        'n'
 #define DELETE_CELL     KEY_BACKSPACE
 
@@ -38,16 +38,18 @@
 #define COLOUR_CURSOR   000004
 #define COLOUR_NOTE     000010
 
-typedef struct {
+typedef struct struct_ball {
     int x;
     int y;
     int direction;
+    struct struct_ball *prev;
+    struct struct_ball *next;
 } ball_t;
 
 int matrix[NCOL][NROW];
 int cursor_x, cursor_y;
-ball_t *balls;
-int ball_count;
+ball_t *first_ball;
+ball_t *last_ball;
 
 void init_curses()
 {
@@ -142,9 +144,9 @@ void set_note(int x, int y)
 
 int ball_on(int x, int y)
 {
-    int i;
-    for(i = 0; i < ball_count; i ++)
-        if(balls[i].x == x && balls[i].y == y)
+    ball_t *ball;
+    for(ball = first_ball; ball != NULL; ball = ball->next)
+        if(ball->x == x && ball->y == y)
             return TRUE;
 
     return FALSE;
@@ -230,10 +232,40 @@ void put_path(int x, int y)
     }
 }
 
+// try going down, then right, up, left
+void drop_ball(int x, int y)
+{
+    if((matrix[x][y] & PATH) != PATH)
+        return;
+
+    ball_t *ball;
+    if(!(ball = calloc(sizeof(ball_t), 1)))
+        return;
+
+    ball->x = x;
+    ball->y = y;
+    if((matrix[x][y] & DOWN) == DOWN)
+        ball->direction = DOWN;
+    else if((matrix[x][y] & RIGHT) == RIGHT)
+        ball->direction = RIGHT;
+    else if((matrix[x][y] & UP) == UP)
+        ball->direction = UP;
+    else if((matrix[x][y] & LEFT) == LEFT)
+        ball->direction = LEFT;
+    else
+        ball->direction = DOWN;
+
+    if(first_ball == NULL)
+        last_ball = first_ball = ball;
+    else {
+        ball->prev = last_ball;
+        last_ball->next = ball;
+        last_ball = ball;
+    }
+}
 
 int main()
 {
-    ball_count = 0;
     cursor_x = NCOL / 2 - 1;
     cursor_y = NROW / 2 - 1;
 
@@ -274,6 +306,11 @@ int main()
 
         case DELETE_CELL:
             clear_cell(cursor_x, cursor_y);
+            redraw();
+            break;
+
+        case DROP_BALL:
+            drop_ball(cursor_x, cursor_y);
             redraw();
             break;
 
