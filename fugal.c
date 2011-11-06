@@ -237,11 +237,6 @@ void put_path(int x, int y)
     }
 }
 
-void play(int y)
-{
-
-}
-
 // try going down, then right, up, left
 void drop_ball(int x, int y)
 {
@@ -331,8 +326,7 @@ int get_new_direction(ball_t *ball)
     int possible_directions_count;
     get_possible_directions(ball, possible_directions, &possible_directions_count);
 
-    if(possible_directions_count <= 2)
-        filter_old_direction(possible_directions, &possible_directions_count, ball->direction);
+    filter_old_direction(possible_directions, &possible_directions_count, ball->direction);
 
     if(possible_directions_count == 0)
         return 0;
