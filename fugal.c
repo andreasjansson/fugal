@@ -2,11 +2,13 @@
 // TODO: config.h
 // TODO: save
 // TODO: row labels
+// TODO: free all [mc]allocs ; valgrind
 
 #include <ncurses.h>
 #include <stdlib.h>
 #include <sys/time.h>
 #include <signal.h>
+#include <alsa/asoundlib.h>
 
 // put these in config
 #define NROW 20
@@ -14,6 +16,8 @@
 
 // ticks per minute
 #define TPM (120 * 4)
+#define NOTE_DURATION 4 // in ticks
+#define MIDI_CLIENT_NAME "Fugal"
 
 // put these in config
 #define MOVE_UP         KEY_UP
@@ -43,6 +47,17 @@
 #define COLOUR_CURSOR   000004
 #define COLOUR_NOTE     000010
 
+#define MESSAGE_NOTE    1
+#define MESSAGE_NOTEOFF 1
+
+typedef struct struct_delayed_noteoff {
+    unsigned char pitch;
+    unsigned char channel;
+    unsigned int ticks_left;
+    struct struct_delayed_noteoff *prev;
+    struct struct_delayed_noteoff *next;
+} delayed_noteoff_t;
+
 typedef struct struct_ball {
     int x;
     int y;
@@ -51,10 +66,49 @@ typedef struct struct_ball {
     struct struct_ball *next;
 } ball_t;
 
+typedef struct {
+    int type;
+    int channel;
+    int byte1;
+    int byte2;
+} message_t;
+
+// for config
+message_t messages[] = {
+    {MESSAGE_NOTE,       0,     60,     127},
+    {MESSAGE_NOTE,       0,     61,     127},
+    {MESSAGE_NOTE,       0,     62,     127},
+    {MESSAGE_NOTE,       0,     63,     127},
+    {MESSAGE_NOTE,       0,     64,     127},
+    {MESSAGE_NOTE,       0,     65,     127},
+    {MESSAGE_NOTE,       0,     66,     127},
+    {MESSAGE_NOTE,       0,     67,     127},
+    {MESSAGE_NOTE,       0,     68,     127},
+    {MESSAGE_NOTE,       0,     69,     127},
+    {MESSAGE_NOTE,       0,     70,     127},
+    {MESSAGE_NOTE,       0,     71,     127},
+    {MESSAGE_NOTE,       0,     72,     127},
+    {MESSAGE_NOTE,       0,     73,     127},
+    {MESSAGE_NOTE,       0,     74,     127},
+    {MESSAGE_NOTE,       0,     75,     127},
+    {MESSAGE_NOTE,       0,     76,     127},
+    {MESSAGE_NOTE,       0,     77,     127},
+    {MESSAGE_NOTE,       0,     78,     127},
+    {MESSAGE_NOTE,       0,     79,     127},
+};
+
 int matrix[NCOL][NROW];
 int cursor_x, cursor_y;
 ball_t *first_ball;
 ball_t *last_ball;
+snd_seq_t *midi;
+int midi_port_id;
+
+void die(char *message)
+{
+    fprintf(stderr, "%s\n", message);
+    exit(1);
+}
 
 void init_curses()
 {
@@ -237,6 +291,67 @@ void put_path(int x, int y)
     }
 }
 
+// TODO: tidy up
+void add_delayed_noteoff(unsigned char pitch, unsigned char channel)
+{
+    delayed_noteoff_t *noteoff = calloc(1, sizeof(delayed_noteoff_t));
+    noteoff->pitch = pitch;
+    noteoff->channel = channel;
+    noteoff->ticks_left = NOTE_DURATION;
+    noteoff->prev = NULL;
+
+    if(first_delayed_noteoff == NULL)
+        first_delayed_noteoff = noteoff;
+    else {
+        noteoff->next = first_delayed_noteoff;
+        first_delayed_noteoff->prev = noteoff;
+        first_delayed_noteoff = noteoff;
+    }
+}
+
+// TODO: tidy up
+void play_message(message_t *message)
+{
+    snd_seq_event_t event;
+    int err;
+
+    switch(message.type) {
+    case MESSAGE_NOTE:
+        if((err = snd_seq_ev_set_noteon(&event, message.channel, message.byte1,
+                                        message.byte2)) < 0)
+            die("Failed to set note");
+        add_delayed_noteoff(message->byte1, message->channel);
+        break;
+        
+    case MESSAGE_NOTEOFF:
+        if((err = snd_seq_ev_set_noteoff(&event, message.channel, message.byte1, 0)) < 0)
+            die("Failed to set note off");
+        break;
+        
+    default:
+        die("No message found. Please check your configuration.\n");
+    }
+
+    if((err = snd_seq_ev_set_direct(&event)) < 0) {
+        fprintf(stderr, "Failed to set direct: %s\n", snd_strerror(err));
+    }
+    if((err = snd_seq_ev_set_source(&event, midi_port_id)) < 0) {
+        fprintf(stderr, "Failed to set source: %s\n", snd_strerror(err));
+    }
+    if((err = snd_seq_ev_set_subs(&event)) < 0) {
+        fprintf(stderr, "Failed to set subs: %s\n", snd_strerror(err));
+    }
+    if((err = snd_seq_event_output_direct(midi, &event)) < 0) {
+        fprintf(stderr, "Failed to output direct: %s\n", snd_strerror(err));
+    }
+}
+
+void play(int y)
+{
+    message_t message = messages[y];
+    play_message(y);
+}
+
 // try going down, then right, up, left
 void drop_ball(int x, int y)
 {
@@ -244,8 +359,9 @@ void drop_ball(int x, int y)
         return;
 
     ball_t *ball;
-    if(!(ball = calloc(sizeof(ball_t), 1)))
-        return;
+    if(!(ball = calloc(1, sizeof(ball_t)))) {
+        die("Failed to create new ball.");
+    }
 
     ball->x = x;
     ball->y = y;
@@ -380,6 +496,24 @@ void remove_ball(ball_t *ball)
     }
 }
 
+void remove_delayed_noteoff(delayed_noteoff_t *delayed_noteoff)
+{
+    if(delayed_noteoff == first_delayed_noteoff && delayed_noteoff == last_delayed_noteoff)
+        first_delayed_noteoff = last_delayed_noteoff = NULL;
+    else if(delayed_noteoff == first_delayed_noteoff) {
+        first_delayed_noteoff = delayed_noteoff->next;
+        first_delayed_noteoff->prev = NULL;
+    }
+    else if(delayed_noteoff == last_delayed_noteoff) {
+        last_delayed_noteoff = delayed_noteoff->prev;
+        last_delayed_noteoff->next = NULL;
+    }
+    else {
+        delayed_noteoff->prev->next = delayed_noteoff->next;
+        delayed_noteoff->next->prev = delayed_noteoff->prev;
+    }
+}
+
 // don't reverse, just fall out
 void step_ball(ball_t *ball)
 {
@@ -396,11 +530,30 @@ void step_ball(ball_t *ball)
         play(ball->y);
 }
 
+void turn_notes_off()
+{
+    message_t message;
+    delayed_noteoff_t *noteoff;
+    for(noteoff = first_delayed_noteoff; noteoff != NULL; noteoff = noteoff->next) {
+        noteoff->ticks_left --;
+        if(noteoff->ticks_left == 0) {
+            message.type = MESSAGE_NOTEOFF;
+            message.channel = noteoff.channel;
+            message.byte1 = noteoff.pitch;
+            play_message(&message);
+            remove_delayed_noteoff(noteoff);
+        }
+    }
+}
+
 void catch_timer(int sig)
 {
     ball_t *ball;
     for(ball = first_ball; ball != NULL; ball = ball->next)
         step_ball(ball);
+
+    turn_notes_off();
+
     redraw();
 }
 
@@ -419,6 +572,33 @@ void init_timer()
     setitimer(ITIMER_REAL, &timer, NULL);
 }
 
+void init_alsa()
+{
+    int err;
+
+    if((err = snd_seq_open(&midi, "default", SND_SEQ_OPEN_OUTPUT, 0)) < 0) {
+        fprintf(stderr, "Error opening ALSA sequencer: %s\n", snd_strerror(err));
+        exit(1);
+    }
+
+    if((err = snd_seq_set_client_name(midi, MIDI_CLIENT_NAME)) < 0) {
+        fprintf(stderr, "Failed to name client: %s\n", snd_strerror(err));
+        exit(1);
+    }
+
+    if((midi_port_id = snd_seq_create_simple_port(
+                                                  midi, MIDI_CLIENT_NAME,
+	SND_SEQ_PORT_CAP_READ|SND_SEQ_PORT_CAP_SUBS_READ,                                                  SND_SEQ_PORT_TYPE_MIDI_GM)) < 0) {
+        fprintf(stderr, "Failed to create port: %s\n", snd_strerror(midi_port_id));
+        exit(1);
+    }
+
+    printf("Opened sequencer handle.\n");
+    printf(" Sequencer handle name: %s\n", snd_seq_name(midi));
+    printf(" Client id: %d\n", snd_seq_client_id(midi));
+    printf(" Port id: %d\n", midi_port_id);
+}
+
 int main()
 {
     // to be reproducible
@@ -427,6 +607,7 @@ int main()
     cursor_x = NCOL / 2 - 1;
     cursor_y = NROW / 2 - 1;
 
+    init_alsa();
     init_curses();
     init_matrix();
     init_timer();
@@ -480,6 +661,6 @@ int main()
 
     end_curses();
 
-    return 0;
+    exit(0);
 }
 
