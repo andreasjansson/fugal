@@ -1,8 +1,9 @@
 // TODO: terminal resize handling (including "too small")
 // TODO: config.h
 // TODO: save
-// TODO: row labels
+// TODO: row labels, also in commands, defined in config
 // TODO: free all [mc]allocs ; valgrind
+// TODO: double play bug when at the end of tail
 
 #include <ncurses.h>
 #include <stdlib.h>
@@ -46,9 +47,10 @@
 #define COLOUR_BALL     000002
 #define COLOUR_CURSOR   000004
 #define COLOUR_NOTE     000010
+#define COLOUR_LABEL    000020
 
 #define MESSAGE_NOTE    1
-#define MESSAGE_NOTEOFF 1
+#define MESSAGE_NOTEOFF 2
 
 typedef struct struct_delayed_noteoff {
     unsigned char pitch;
@@ -67,6 +69,7 @@ typedef struct struct_ball {
 } ball_t;
 
 typedef struct {
+    char *label;
     int type;
     int channel;
     int byte1;
@@ -75,26 +78,26 @@ typedef struct {
 
 // for config
 message_t messages[] = {
-    {MESSAGE_NOTE,       0,     60,     127},
-    {MESSAGE_NOTE,       0,     61,     127},
-    {MESSAGE_NOTE,       0,     62,     127},
-    {MESSAGE_NOTE,       0,     63,     127},
-    {MESSAGE_NOTE,       0,     64,     127},
-    {MESSAGE_NOTE,       0,     65,     127},
-    {MESSAGE_NOTE,       0,     66,     127},
-    {MESSAGE_NOTE,       0,     67,     127},
-    {MESSAGE_NOTE,       0,     68,     127},
-    {MESSAGE_NOTE,       0,     69,     127},
-    {MESSAGE_NOTE,       0,     70,     127},
-    {MESSAGE_NOTE,       0,     71,     127},
-    {MESSAGE_NOTE,       0,     72,     127},
-    {MESSAGE_NOTE,       0,     73,     127},
-    {MESSAGE_NOTE,       0,     74,     127},
-    {MESSAGE_NOTE,       0,     75,     127},
-    {MESSAGE_NOTE,       0,     76,     127},
-    {MESSAGE_NOTE,       0,     77,     127},
-    {MESSAGE_NOTE,       0,     78,     127},
-    {MESSAGE_NOTE,       0,     79,     127},
+    {"G5",              MESSAGE_NOTE,       0,     79,     127},
+    {"F#5",             MESSAGE_NOTE,       0,     78,     127},
+    {"F5",              MESSAGE_NOTE,       0,     77,     127},
+    {"E5",              MESSAGE_NOTE,       0,     76,     127},
+    {"D#5",             MESSAGE_NOTE,       0,     75,     127},
+    {"D5",              MESSAGE_NOTE,       0,     74,     127},
+    {"C#5",             MESSAGE_NOTE,       0,     73,     127},
+    {"C5",              MESSAGE_NOTE,       0,     72,     127},
+    {"B4",              MESSAGE_NOTE,       0,     71,     127},
+    {"A#4",             MESSAGE_NOTE,       0,     70,     127},
+    {"A4",              MESSAGE_NOTE,       0,     69,     127},
+    {"G#4",             MESSAGE_NOTE,       0,     68,     127},
+    {"G4",              MESSAGE_NOTE,       0,     67,     127},
+    {"F#4",             MESSAGE_NOTE,       0,     66,     127},
+    {"F4",              MESSAGE_NOTE,       0,     65,     127},
+    {"E4",              MESSAGE_NOTE,       0,     64,     127},
+    {"D#4",             MESSAGE_NOTE,       0,     63,     127},
+    {"D4",              MESSAGE_NOTE,       0,     62,     127},
+    {"C#4",             MESSAGE_NOTE,       0,     61,     127},
+    {"C4",              MESSAGE_NOTE,       0,     60,     127},
 };
 
 int matrix[NCOL][NROW];
@@ -103,6 +106,9 @@ ball_t *first_ball;
 ball_t *last_ball;
 snd_seq_t *midi;
 int midi_port_id;
+delayed_noteoff_t *first_delayed_noteoff;
+delayed_noteoff_t *last_delayed_noteoff;
+int max_label_length;
 
 void die(char *message)
 {
@@ -127,6 +133,7 @@ void init_curses()
     init_pair(COLOUR_NOTE | COLOUR_CURSOR, COLOR_RED, COLOR_WHITE);
     init_pair(COLOUR_NOTE | COLOUR_BALL, COLOR_RED, COLOR_GREEN);
     init_pair(COLOUR_NOTE | COLOUR_BALL | COLOUR_CURSOR, COLOR_GREEN, COLOR_RED);
+    init_pair(COLOUR_LABEL, COLOR_WHITE, COLOR_BLACK);
 }
 
 void end_curses()
@@ -225,19 +232,51 @@ int colour_for_cell(int cell, int x, int y)
     return colour;
 }
 
+int get_max_label_length()
+{
+    int max_length = 0, length, i;
+    for(i = 0; i < NROW; i ++) {
+        length = strlen(messages[i].label);
+        if(length > max_length)
+            max_length = length;
+    }
+    return max_length;
+}
+
 void redraw()
 {
-    int x, y, cell, colour, symbol;
+    int x, y, cell, colour, symbol, max_x, max_y,
+        offset_x, offset_y;
+
+    getmaxyx(stdscr, max_y, max_x);
+    offset_x = max_x / 2 - NCOL / 2;
+    offset_y = max_y / 2 - NROW / 2;
+
     for(y = 0; y < NROW; y ++) {
         for(x = 0; x < NCOL; x ++) {
             cell = matrix[x][y];
             colour = colour_for_cell(cell, x, y);
             attron(COLOR_PAIR(colour));
             symbol = symbol_for_cell(cell);
-            mvaddch(y, x, symbol);
+            mvaddch(y + offset_y, x + offset_x, symbol);
         }
     }
 
+    int label_space = offset_x - 1;
+    int label_length = max_label_length > label_space ? label_space : max_label_length;
+    int label_offset_x = label_space - label_length;
+    char *label;
+    attron(COLOR_PAIR(COLOUR_LABEL));
+    for(y = 0; y < NROW; y ++) {
+        label = strndup(messages[y].label, label_space);
+        if(y == cursor_y)
+            attron(A_BOLD);
+        else
+            attroff(A_BOLD);
+        mvprintw(y + offset_y, label_offset_x, "%s", label);
+    }
+    free(label);
+    
     refresh();
 }
 
@@ -301,7 +340,7 @@ void add_delayed_noteoff(unsigned char pitch, unsigned char channel)
     noteoff->prev = NULL;
 
     if(first_delayed_noteoff == NULL)
-        first_delayed_noteoff = noteoff;
+        first_delayed_noteoff = last_delayed_noteoff = noteoff;
     else {
         noteoff->next = first_delayed_noteoff;
         first_delayed_noteoff->prev = noteoff;
@@ -315,16 +354,16 @@ void play_message(message_t *message)
     snd_seq_event_t event;
     int err;
 
-    switch(message.type) {
+    switch(message->type) {
     case MESSAGE_NOTE:
-        if((err = snd_seq_ev_set_noteon(&event, message.channel, message.byte1,
-                                        message.byte2)) < 0)
+        if((err = snd_seq_ev_set_noteon(&event, message->channel, message->byte1,
+                                        message->byte2)) < 0)
             die("Failed to set note");
         add_delayed_noteoff(message->byte1, message->channel);
         break;
         
     case MESSAGE_NOTEOFF:
-        if((err = snd_seq_ev_set_noteoff(&event, message.channel, message.byte1, 0)) < 0)
+        if((err = snd_seq_ev_set_noteoff(&event, message->channel, message->byte1, 0)) < 0)
             die("Failed to set note off");
         break;
         
@@ -348,8 +387,8 @@ void play_message(message_t *message)
 
 void play(int y)
 {
-    message_t message = messages[y];
-    play_message(y);
+    message_t *message = &messages[y];
+    play_message(message);
 }
 
 // try going down, then right, up, left
@@ -494,6 +533,7 @@ void remove_ball(ball_t *ball)
         ball->prev->next = ball->next;
         ball->next->prev = ball->prev;
     }
+    free(ball);
 }
 
 void remove_delayed_noteoff(delayed_noteoff_t *delayed_noteoff)
@@ -512,6 +552,7 @@ void remove_delayed_noteoff(delayed_noteoff_t *delayed_noteoff)
         delayed_noteoff->prev->next = delayed_noteoff->next;
         delayed_noteoff->next->prev = delayed_noteoff->prev;
     }
+    free(delayed_noteoff);
 }
 
 // don't reverse, just fall out
@@ -538,12 +579,18 @@ void turn_notes_off()
         noteoff->ticks_left --;
         if(noteoff->ticks_left == 0) {
             message.type = MESSAGE_NOTEOFF;
-            message.channel = noteoff.channel;
-            message.byte1 = noteoff.pitch;
+            message.channel = noteoff->channel;
+            message.byte1 = noteoff->pitch;
             play_message(&message);
             remove_delayed_noteoff(noteoff);
         }
     }
+}
+
+// TODO: getmaxyx breaks after this.
+void catch_resize(int sig)
+{
+    clear();
 }
 
 void catch_timer(int sig)
@@ -609,7 +656,9 @@ int main()
 
     init_alsa();
     init_curses();
+    signal(SIGWINCH, catch_resize);
     init_matrix();
+    max_label_length = get_max_label_length();
     init_timer();
     redraw();
 
