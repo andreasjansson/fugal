@@ -1,14 +1,19 @@
-// TODO: catch ctrl-c
 // TODO: terminal resize handling (including "too small")
 // TODO: config.h
 // TODO: save
+// TODO: row labels
 
 #include <ncurses.h>
 #include <stdlib.h>
+#include <sys/time.h>
+#include <signal.h>
 
 // put these in config
 #define NROW 20
 #define NCOL 40
+
+// ticks per minute
+#define TPM (120 * 4)
 
 // put these in config
 #define MOVE_UP         KEY_UP
@@ -232,6 +237,11 @@ void put_path(int x, int y)
     }
 }
 
+void play(int y)
+{
+
+}
+
 // try going down, then right, up, left
 void drop_ball(int x, int y)
 {
@@ -255,6 +265,9 @@ void drop_ball(int x, int y)
     else
         ball->direction = DOWN;
 
+    if((matrix[x][y] & NOTE) == NOTE)
+        play(y);
+
     if(first_ball == NULL)
         last_ball = first_ball = ball;
     else {
@@ -264,13 +277,165 @@ void drop_ball(int x, int y)
     }
 }
 
+void get_possible_directions(ball_t *ball, int *directions, int *count)
+{
+    *count = 0;
+    int cell = matrix[ball->x][ball->y];
+    if((cell & UP) == UP)
+        directions[(*count) ++] = UP;
+    if((cell & RIGHT) == RIGHT)
+        directions[(*count) ++] = RIGHT;
+    if((cell & DOWN) == DOWN)
+        directions[(*count) ++] = DOWN;
+    if((cell & LEFT) == LEFT)
+        directions[(*count) ++] = LEFT;
+}
+
+int get_opposite(int direction)
+{
+    switch(direction) {
+    case UP:
+        return DOWN;
+    case RIGHT:
+        return LEFT;
+    case DOWN:
+        return UP;
+    case LEFT:
+        return RIGHT;
+    default:
+        return 0;
+    }
+}
+
+int is_opposite(int direction1, int direction2)
+{
+    return direction2 == get_opposite(direction1);
+}
+
+void filter_old_direction(int *directions, int *count, int direction)
+{
+    int opposite = get_opposite(direction);
+    int i;
+    for(i = 0; i < *count; i ++) {
+        if(directions[i] == opposite) {
+            directions[i] = directions[(*count) - 1];
+            (*count) --;
+            return;
+        }
+    }
+}
+
+int get_new_direction(ball_t *ball)
+{
+    int possible_directions[4];
+    int possible_directions_count;
+    get_possible_directions(ball, possible_directions, &possible_directions_count);
+
+    if(possible_directions_count <= 2)
+        filter_old_direction(possible_directions, &possible_directions_count, ball->direction);
+
+    if(possible_directions_count == 0)
+        return 0;
+
+    if(possible_directions_count == 1)
+        return possible_directions[0];
+
+    return possible_directions[random() % possible_directions_count];
+}
+
+void increment_ball_position(ball_t *ball)
+{
+    switch(ball->direction) {
+    case UP:
+        ball->y --;
+        break;
+    case RIGHT:
+        ball->x ++;
+        break;
+    case DOWN:
+        ball->y ++;
+        break;
+    case LEFT:
+        ball->x --;
+        break;
+    default:
+        break;
+    }
+}
+
+int ball_is_outside(ball_t *ball)
+{
+    return ball->x < 0 || ball-> y < 0 || ball->x >= NCOL || ball->y >= NROW;
+}
+
+void remove_ball(ball_t *ball)
+{
+    if(ball == first_ball && ball == last_ball)
+        first_ball = last_ball = NULL;
+    else if(ball == first_ball) {
+        first_ball = ball->next;
+        first_ball->prev = NULL;
+    }
+    else if(ball == last_ball) {
+        last_ball = ball->prev;
+        last_ball->next = NULL;
+    }
+    else {
+        ball->prev->next = ball->next;
+        ball->next->prev = ball->prev;
+    }
+}
+
+// don't reverse, just fall out
+void step_ball(ball_t *ball)
+{
+    int new_direction = get_new_direction(ball);
+    if(!new_direction)
+        remove_ball(ball);
+    ball->direction = new_direction;
+    increment_ball_position(ball);
+
+    if(ball_is_outside(ball))
+        remove_ball(ball);
+
+    if((matrix[ball->x][ball->y] & NOTE) == NOTE)
+        play(ball->y);
+}
+
+void catch_timer(int sig)
+{
+    ball_t *ball;
+    for(ball = first_ball; ball != NULL; ball = ball->next)
+        step_ball(ball);
+    redraw();
+}
+
+void init_timer()
+{
+    struct itimerval timer;
+    long int usec = 60 * 1000000 / TPM;
+    long int sec = usec / 1000000;
+    usec = usec % 1000000;
+    timer.it_interval.tv_sec = sec;
+    timer.it_interval.tv_usec = usec;
+    timer.it_value.tv_sec = sec;
+    timer.it_value.tv_usec = usec;
+
+    signal(SIGALRM, catch_timer);
+    setitimer(ITIMER_REAL, &timer, NULL);
+}
+
 int main()
 {
+    // to be reproducible
+    srandom(0);
+
     cursor_x = NCOL / 2 - 1;
     cursor_y = NROW / 2 - 1;
 
     init_curses();
     init_matrix();
+    init_timer();
     redraw();
 
     int ch;
