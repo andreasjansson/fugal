@@ -1,8 +1,5 @@
-// TODO: terminal resize handling (including "too small")
 // TODO: config.h
 // TODO: save
-// TODO: row labels, also in commands, defined in config
-// TODO: free all [mc]allocs ; valgrind
 // TODO: double play bug when at the end of tail
 
 #include <ncurses.h>
@@ -10,6 +7,7 @@
 #include <sys/time.h>
 #include <signal.h>
 #include <alsa/asoundlib.h>
+#include <tpl.h>
 
 // put these in config
 #define NROW 20
@@ -21,14 +19,19 @@
 #define MIDI_CLIENT_NAME "Fugal"
 
 // put these in config
-#define MOVE_UP         KEY_UP
-#define MOVE_RIGHT      KEY_RIGHT
-#define MOVE_DOWN       KEY_DOWN
-#define MOVE_LEFT       KEY_LEFT
-#define PUT_PATH        ' '
-#define DROP_BALL       '\n'
-#define SET_NOTE        'n'
-#define DELETE_CELL     KEY_BACKSPACE
+#define CMD_MOVE_UP     KEY_UP
+#define CMD_MOVE_RIGHT  KEY_RIGHT
+#define CMD_MOVE_DOWN   KEY_DOWN
+#define CMD_MOVE_LEFT   KEY_LEFT
+#define CMD_PUT_PATH    ' '
+#define CMD_DROP_BALL   '\n'
+#define CMD_SET_NOTE    'n'
+#define CMD_DELETE      KEY_BACKSPACE
+#define CMD_SAVE        's'
+#define CMD_LOAD        'l'
+#define CMD_QUIT        'q'
+
+#define SAVE_FILE_NAME  "fugal.save.tpl"
 
 #define UP              000001
 #define UPRIGHT         000002
@@ -639,14 +642,25 @@ void init_alsa()
         fprintf(stderr, "Failed to create port: %s\n", snd_strerror(midi_port_id));
         exit(1);
     }
-
-    printf("Opened sequencer handle.\n");
-    printf(" Sequencer handle name: %s\n", snd_seq_name(midi));
-    printf(" Client id: %d\n", snd_seq_client_id(midi));
-    printf(" Port id: %d\n", midi_port_id);
 }
 
-int main()
+void save()
+{
+    tpl_node *tn = tpl_map("i##", matrix, NCOL, NROW);
+    tpl_pack(tn, 0);
+    tpl_dump(tn, TPL_FILE, SAVE_FILE_NAME);
+    tpl_free(tn);
+}
+
+void load()
+{
+    tpl_node *tn = tpl_map("i##", matrix, NCOL, NROW);
+    tpl_load(tn, TPL_FILE, SAVE_FILE_NAME);
+    tpl_unpack(tn, 0);
+    tpl_free(tn);
+}
+
+int main(int argc, char **argv)
 {
     // to be reproducible
     srandom(0);
@@ -663,43 +677,52 @@ int main()
     redraw();
 
     int ch;
-    while(ch != 'q') {
+    while(ch != CMD_QUIT) {
         ch = getch();
         switch(ch) {
-        case MOVE_UP:
+        case CMD_MOVE_UP:
             set_position(cursor_x, cursor_y - 1);
             redraw();
             break;
-        case MOVE_RIGHT:
+        case CMD_MOVE_RIGHT:
             set_position(cursor_x + 1, cursor_y);
             redraw();
             break;
-        case MOVE_DOWN:
+        case CMD_MOVE_DOWN:
             set_position(cursor_x, cursor_y + 1);
             redraw();
             break;
-        case MOVE_LEFT:
+        case CMD_MOVE_LEFT:
             set_position(cursor_x - 1, cursor_y);
             redraw();
             break;
 
-        case PUT_PATH:
+        case CMD_PUT_PATH:
             put_path(cursor_x, cursor_y);
             redraw();
             break;
 
-        case SET_NOTE:
+        case CMD_SET_NOTE:
             set_note(cursor_x, cursor_y);
             redraw();
             break;
 
-        case DELETE_CELL:
+        case CMD_DELETE:
             clear_cell(cursor_x, cursor_y);
             redraw();
             break;
 
-        case DROP_BALL:
+        case CMD_DROP_BALL:
             drop_ball(cursor_x, cursor_y);
+            redraw();
+            break;
+
+        case CMD_SAVE:
+            save();
+            break;
+
+        case CMD_LOAD:
+            load();
             redraw();
             break;
 

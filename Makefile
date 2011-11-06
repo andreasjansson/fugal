@@ -1,5 +1,5 @@
 all:
-	gcc -ofugal -g -Wall -lncurses -lasound fugal.c
+	gcc -ofugal -g -Wall -lncurses -lasound -ltpl fugal.c
 
 install:
 	mkdir -p /usr/local/bin/
