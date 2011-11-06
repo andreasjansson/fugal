@@ -1,4 +1,3 @@
-// TODO: save
 // TODO: double play bug when at the end of tail
 
 #include <ncurses.h>
@@ -42,6 +41,7 @@ typedef struct struct_ball {
     int x;
     int y;
     int direction;
+    int expired;
     struct struct_ball *prev;
     struct struct_ball *next;
 } ball_t;
@@ -65,6 +65,7 @@ int midi_port_id;
 delayed_noteoff_t *first_delayed_noteoff;
 delayed_noteoff_t *last_delayed_noteoff;
 int max_label_length;
+int ball_dropped_this_tick = FALSE;
 
 void die(char *message)
 {
@@ -360,6 +361,7 @@ void drop_ball(int x, int y)
 
     ball->x = x;
     ball->y = y;
+    ball->expired = FALSE;
     if((matrix[x][y] & DOWN) == DOWN)
         ball->direction = DOWN;
     else if((matrix[x][y] & RIGHT) == RIGHT)
@@ -515,13 +517,18 @@ void remove_delayed_noteoff(delayed_noteoff_t *delayed_noteoff)
 void step_ball(ball_t *ball)
 {
     int new_direction = get_new_direction(ball);
-    if(!new_direction)
-        remove_ball(ball);
+    if(!new_direction) {
+        ball->expired = TRUE;
+        return;
+    }
+
     ball->direction = new_direction;
     increment_ball_position(ball);
 
-    if(ball_is_outside(ball))
-        remove_ball(ball);
+    if(ball_is_outside(ball)) {
+        ball->expired = TRUE;
+        return;
+    }
 
     if((matrix[ball->x][ball->y] & NOTE) == NOTE)
         play(ball->y);
@@ -551,11 +558,28 @@ void catch_resize(int sig)
 
 void catch_timer(int sig)
 {
-    ball_t *ball;
+    ball_t *ball, *next_ball;
     for(ball = first_ball; ball != NULL; ball = ball->next)
         step_ball(ball);
 
+    ball = first_ball;
+    while(ball != NULL) {
+        next_ball = ball;
+        if(ball->expired) {
+            next_ball = ball->next;
+            remove_ball(ball);
+            ball = next_ball;
+        }
+        else
+            ball = ball->next;
+    }
+
+    for(ball = first_ball; ball != NULL; ball = ball->next)
+        if(ball->expired)
+            
+
     turn_notes_off();
+    ball_dropped_this_tick = FALSE;
 
     redraw();
 }
@@ -666,8 +690,13 @@ int main(int argc, char **argv)
             break;
 
         case CMD_DROP_BALL:
-            drop_ball(cursor_x, cursor_y);
-            redraw();
+            // if we allow dropping balls too quickly we run into
+            // conditions and all sorts of fuckups.
+            if(!ball_dropped_this_tick) {
+                ball_dropped_this_tick = TRUE;
+                drop_ball(cursor_x, cursor_y);
+                redraw();
+            }
             break;
 
         case CMD_SAVE:
