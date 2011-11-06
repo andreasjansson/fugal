@@ -540,7 +540,7 @@ void turn_notes_off()
     delayed_noteoff_t *noteoff;
     for(noteoff = first_delayed_noteoff; noteoff != NULL; noteoff = noteoff->next) {
         noteoff->ticks_left --;
-        if(noteoff->ticks_left == 0) {
+        if(noteoff->ticks_left <= 0) {
             message.type = MESSAGE_NOTEOFF;
             message.channel = noteoff->channel;
             message.byte1 = noteoff->pitch;
@@ -576,8 +576,8 @@ void catch_timer(int sig)
 
     for(ball = first_ball; ball != NULL; ball = ball->next)
         if(ball->expired)
+            remove_ball(ball);
             
-
     turn_notes_off();
     ball_dropped_this_tick = FALSE;
 
